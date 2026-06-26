@@ -362,13 +362,8 @@ def build_docx(
         line = lines[i]
         stripped = line.strip()
 
-        # ── 빈 줄: 단락 간격으로 처리 ──────────────────────
+        # ── 빈 줄: 완전 무시 (space_before/after로 간격 제어)
         if not stripped:
-            # 연속 빈 줄은 한 번만
-            if i > 0 and lines[i-1].strip():
-                p = doc.add_paragraph()
-                p.paragraph_format.space_before = Pt(2)
-                p.paragraph_format.space_after  = Pt(2)
             i += 1
             continue
 
