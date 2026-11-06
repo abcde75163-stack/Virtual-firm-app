@@ -199,8 +199,8 @@ TOC_ENTRIES = [
     ("  Ⅳ-1. Virtual Firm 개요", False),
     ("  Ⅳ-2. Lean Canvas 및 BMC", False),
     ("  Ⅳ-3. SWOT 분석", False),
-    ("  Ⅳ-4. STP 및 GTM 전략", False),
-    ("  Ⅳ-5. 연구자·기술보유자 역량", False),
+    ("  Ⅳ-4. STP 전략", False),
+    ("  Ⅳ-5. 연구자 역량 및 사업화 참여 의지 확인", False),
     ("  Ⅳ-6. 사업타당성 종합 판단 및 결론", False),
 ]
 
@@ -388,19 +388,6 @@ def build_docx(
             i += 1
             continue
 
-        # ── 섹션 제목 ## ────────────────────────────────────
-        if SECTION_RE.match(stripped):
-            text = re.sub(r"^#+\s+", "", stripped)
-            p = doc.add_paragraph()
-            p.paragraph_format.space_before = Pt(12)
-            p.paragraph_format.space_after  = Pt(5)
-            r0 = p.add_run("■ ")
-            r0.font.name = "맑은 고딕"; r0.font.size = Pt(11.5)
-            r0.font.bold = True; r0.font.color.rgb = BLUE
-            _add_runs_with_bold(p, text, Pt(11.5), NAVY, base_bold=True)
-            i += 1
-            continue
-
         # ── 서브섹션 ### ────────────────────────────────────
         if SUBSEC_RE.match(stripped):
             text = re.sub(r"^#+\s+", "", stripped)
@@ -411,6 +398,19 @@ def build_docx(
             r0.font.name = "맑은 고딕"; r0.font.size = Pt(10.5)
             r0.font.bold = True; r0.font.color.rgb = BLUE
             _add_runs_with_bold(p, text, Pt(10.5), DGRAY, base_bold=True)
+            i += 1
+            continue
+
+        # ── 섹션 제목 ## ────────────────────────────────────
+        if SECTION_RE.match(stripped):
+            text = re.sub(r"^#+\s+", "", stripped)
+            p = doc.add_paragraph()
+            p.paragraph_format.space_before = Pt(12)
+            p.paragraph_format.space_after  = Pt(5)
+            r0 = p.add_run("■ ")
+            r0.font.name = "맑은 고딕"; r0.font.size = Pt(11.5)
+            r0.font.bold = True; r0.font.color.rgb = BLUE
+            _add_runs_with_bold(p, text, Pt(11.5), NAVY, base_bold=True)
             i += 1
             continue
 
@@ -518,11 +518,14 @@ def _fix_docx(docx_bytes: bytes) -> bytes:
                 data = zin.read(fname)
                 if fname == 'word/settings.xml':
                     content = data.decode('utf-8')
-                    content = re.sub(
-                        r'<w:zoom([^/]*?)/>',
-                        lambda m: f'<w:zoom{m.group(1)} w:percent="100"/>',
-                        content
-                    )
+                    zoom_match = re.search(r'<w:zoom\b([^>]*)/>', content)
+                    if zoom_match and 'w:percent=' not in zoom_match.group(1):
+                        content = re.sub(
+                            r'<w:zoom\b([^>]*)/>',
+                            lambda m: f'<w:zoom{m.group(1)} w:percent="100"/>',
+                            content,
+                            count=1,
+                        )
                     data = content.encode('utf-8')
                 zout.writestr(fname, data)
     return buf_out.getvalue()

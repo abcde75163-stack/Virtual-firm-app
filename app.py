@@ -1,12 +1,54 @@
-import streamlit as st
+import html
 import os
+import re
+import tempfile
 import traceback
 from pathlib import Path
-import tempfile
+
+import streamlit as st
 
 from core.patent_parser import extract_text_from_file
 from core.report_generator import generate_vf_report_streaming
 from core.docx_builder import build_docx
+
+
+MAX_PATENT_FILES = 10
+MAX_PATENT_TOTAL_BYTES = 50 * 1024 * 1024
+
+
+def _get_secret(name: str, default: str = "") -> str:
+    """환경변수를 우선하고 Streamlit Secrets를 보조 설정으로 사용한다."""
+    value = os.environ.get(name)
+    if value:
+        return value
+    try:
+        return st.secrets.get(name, default)
+    except Exception:
+        return default
+
+
+def _extract_uploaded_file(uploaded_file) -> str:
+    """업로드 파일을 임시 저장해 파싱하고 예외 여부와 무관하게 삭제한다."""
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            delete=False,
+            suffix=Path(uploaded_file.name).suffix,
+        ) as tmp:
+            tmp.write(uploaded_file.getvalue())
+            tmp_path = tmp.name
+        return extract_text_from_file(tmp_path)
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
+def _report_base_name(patent_files) -> str:
+    first_stem = Path(patent_files[0].name).stem if patent_files else "보고서"
+    first_stem = re.sub(r'[\\/:*?"<>|]+', "_", first_stem).strip(" ._") or "보고서"
+    if len(patent_files) > 1:
+        return f"{first_stem}_외{len(patent_files) - 1}건"
+    return first_stem
 
 # ── 페이지 설정 ──────────────────────────────────────────
 st.set_page_config(
@@ -177,14 +219,14 @@ if "docx_bytes"     not in st.session_state: st.session_state.docx_bytes = None
 if "error_detail"   not in st.session_state: st.session_state.error_detail = ""
 if "generating"     not in st.session_state: st.session_state.generating = False
 if "done"           not in st.session_state: st.session_state.done = False
-if "patent_text"    not in st.session_state: st.session_state.patent_text = ""
-if "demand_text"    not in st.session_state: st.session_state.demand_text = ""
+if "download_filename" not in st.session_state: st.session_state.download_filename = "VF_TBD_보고서_v3.docx"
 
 
 # ── API 키 ───────────────────────────────────────────────
-api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+api_key = _get_secret("OPENAI_API_KEY")
+openai_model = _get_secret("OPENAI_MODEL", "gpt-6-astra")
 if not api_key:
-    st.warning("⚠️ ANTHROPIC_API_KEY 환경변수가 설정되지 않았습니다. Streamlit Cloud Secrets에서 설정해 주세요.")
+    st.warning("⚠️ OPENAI_API_KEY가 설정되지 않았습니다. Streamlit Cloud Secrets에서 설정해 주세요.")
 
 
 # ═══════════════════════════════════════════════════════
@@ -197,16 +239,32 @@ with col_left:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.markdown('<div class="section-title">① 특허 명세서 업로드 <span style="color:#dc3545;font-size:0.8rem;">필수</span></div>', unsafe_allow_html=True)
 
-    patent_file = st.file_uploader(
-        "특허 명세서 파일을 업로드하세요",
+    patent_files = st.file_uploader(
+        "특허 명세서 파일을 한 개 이상 업로드하세요",
         type=["pdf", "docx"],
         key="patent_upload",
-        help="PDF 또는 Word(.docx) 형식의 특허 명세서를 업로드하세요."
+        accept_multiple_files=True,
+        help=f"PDF 또는 Word(.docx) 형식의 특허 명세서를 최대 {MAX_PATENT_FILES}개까지 업로드하세요.",
     )
-    st.markdown('<p class="upload-hint">지원 형식: PDF, DOCX · 최대 50MB</p>', unsafe_allow_html=True)
+    st.markdown('<p class="upload-hint">지원 형식: PDF, DOCX · 최대 10개 · 전체 50MB</p>', unsafe_allow_html=True)
 
-    if patent_file:
-        st.success(f"✅ {patent_file.name} ({patent_file.size // 1024}KB) 업로드 완료")
+    patent_files = patent_files or []
+    patent_total_bytes = sum(uploaded.size for uploaded in patent_files)
+    patent_upload_error = ""
+    if len(patent_files) > MAX_PATENT_FILES:
+        patent_upload_error = f"특허 명세서는 최대 {MAX_PATENT_FILES}개까지 업로드할 수 있습니다."
+    elif patent_total_bytes > MAX_PATENT_TOTAL_BYTES:
+        patent_upload_error = "특허 명세서 전체 용량은 50MB 이하여야 합니다."
+
+    if patent_upload_error:
+        st.error(f"❌ {patent_upload_error}")
+    elif patent_files:
+        st.success(
+            f"✅ 특허 명세서 {len(patent_files)}개 업로드 완료 "
+            f"(총 {patent_total_bytes / 1024 / 1024:.1f}MB)"
+        )
+        for uploaded in patent_files:
+            st.caption(f"• {uploaded.name} ({uploaded.size // 1024:,}KB)")
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -284,12 +342,12 @@ btn_col1, btn_col2, btn_col3 = st.columns([1, 2, 1])
 with btn_col2:
     generate_btn = st.button(
         "🚀 VF TBD 보고서 생성 시작",
-        disabled=(patent_file is None or not api_key or st.session_state.generating),
+        disabled=(not patent_files or bool(patent_upload_error) or not api_key or st.session_state.generating),
         use_container_width=True,
         key="generate_btn"
     )
-    if not patent_file:
-        st.markdown('<p style="text-align:center;color:#dc3545;font-size:0.82rem;margin-top:0.3rem;">특허 명세서를 먼저 업로드해 주세요</p>', unsafe_allow_html=True)
+    if not patent_files:
+        st.markdown('<p style="text-align:center;color:#dc3545;font-size:0.82rem;margin-top:0.3rem;">특허 명세서를 한 개 이상 업로드해 주세요</p>', unsafe_allow_html=True)
     if not api_key:
         st.markdown('<p style="text-align:center;color:#dc3545;font-size:0.82rem;margin-top:0.3rem;">API 키가 설정되지 않았습니다</p>', unsafe_allow_html=True)
 
@@ -297,7 +355,7 @@ with btn_col2:
 # ═══════════════════════════════════════════════════════
 # 생성 실행
 # ═══════════════════════════════════════════════════════
-if generate_btn and patent_file and api_key:
+if generate_btn and patent_files and not patent_upload_error and api_key:
     # 상태 초기화
     st.session_state.logs        = []
     st.session_state.report_text = ""
@@ -321,7 +379,8 @@ if generate_btn and patent_file and api_key:
             "error":   "log-error",
             "section": "log-section",
         }.get(level, "log-info")
-        st.session_state.logs.append(f'<span class="{css_class}">{msg}</span>')
+        safe_msg = html.escape(msg)
+        st.session_state.logs.append(f'<span class="{css_class}">{safe_msg}</span>')
         html = "<br>".join(st.session_state.logs)
         log_container.markdown(
             f'<div class="progress-log">{html}</div>',
@@ -333,41 +392,33 @@ if generate_btn and patent_file and api_key:
         add_log("▶ [1/4] 파일 파싱 시작...", "section")
         progress_bar.progress(5, text="특허 명세서 파싱 중...")
 
-        with tempfile.NamedTemporaryFile(
-            delete=False,
-            suffix=Path(patent_file.name).suffix
-        ) as tmp:
-            tmp.write(patent_file.read())
-            tmp_path = tmp.name
+        patent_documents = []
+        for index, patent_file in enumerate(patent_files, start=1):
+            add_log(f"  ▷ [{index}/{len(patent_files)}] {patent_file.name} 파싱 중...", "info")
+            patent_text = _extract_uploaded_file(patent_file)
+            patent_documents.append((patent_file.name, patent_text))
+            char_count = len(patent_text)
+            add_log(f"  ✓ {patent_file.name} ({char_count:,}자 추출)", "success")
+            if char_count < 500:
+                add_log(f"  ⚠ {patent_file.name}: 추출된 텍스트가 너무 짧습니다.", "warn")
 
-        patent_text = extract_text_from_file(tmp_path)
-        os.unlink(tmp_path)
-
-        char_count = len(patent_text)
-        add_log(f"  ✓ 특허 명세서 파싱 완료 ({char_count:,}자 추출)", "success")
-
-        if char_count < 500:
-            add_log("  ⚠ 추출된 텍스트가 너무 짧습니다. 파일을 확인해 주세요.", "warn")
+        total_chars = sum(len(text) for _, text in patent_documents)
+        add_log(
+            f"  ✓ 특허 명세서 {len(patent_documents)}개 파싱 완료 (총 {total_chars:,}자)",
+            "success",
+        )
 
         # 수요기업 IR 파싱 (선택)
         demand_text = ""
         if demand_ir_file:
             add_log("  ▷ 수요기업 IR자료 파싱 중...", "info")
-            with tempfile.NamedTemporaryFile(
-                delete=False,
-                suffix=Path(demand_ir_file.name).suffix
-            ) as tmp2:
-                tmp2.write(demand_ir_file.read())
-                tmp2_path = tmp2.name
-
-            demand_text = extract_text_from_file(tmp2_path)
-            os.unlink(tmp2_path)
+            demand_text = _extract_uploaded_file(demand_ir_file)
             add_log(f"  ✓ 수요기업 IR자료 파싱 완료 ({len(demand_text):,}자)", "success")
 
         progress_bar.progress(15, text="파싱 완료 — AI 분석 준비 중...")
 
         # ── STEP 2: AI 보고서 생성 ──────────────────────
-        add_log("▶ [2/4] Claude AI 보고서 생성 시작 (4섹션 분할 생성)...", "section")
+        add_log(f"▶ [2/4] GPT 보고서 생성 시작 ({openai_model}, 4섹션 분할 생성)...", "section")
         add_log("  ℹ 분량에 따라 3~7분 소요될 수 있습니다.", "info")
 
         sections_done = 0
@@ -389,13 +440,14 @@ if generate_btn and patent_file and api_key:
 
             for chunk in generate_vf_report_streaming(
                 api_key        = api_key,
-                patent_text    = patent_text,
+                patent_documents = patent_documents,
                 section_name   = section_name,
                 prev_sections  = "\n\n".join(full_report),
                 biz_type       = biz_type,
                 demand_company = demand_company,
                 demand_text    = demand_text,
                 extra_note     = extra_note,
+                model          = openai_model,
             ):
                 section_text += chunk
                 token_count  += len(chunk)
@@ -405,6 +457,10 @@ if generate_btn and patent_file and api_key:
                     dots = "·" * ((token_count // 500) % 5 + 1)
                     status_text.markdown(f"*{section_name} 생성 중{dots}*")
 
+            section_text = section_text.strip()
+            expected_heading = f"# {section_name}"
+            if not section_text.startswith(expected_heading):
+                section_text = f"{expected_heading}\n\n{section_text}"
             full_report.append(section_text)
             sections_done += 1
             add_log(f"  ✓ {section_name} 완료 ({len(section_text):,}자)", "success")
@@ -417,13 +473,20 @@ if generate_btn and patent_file and api_key:
         add_log("▶ [3/4] Word 문서(.docx) 변환 중...", "section")
         progress_bar.progress(96, text="Word 문서 변환 중...")
 
-        patent_title = patent_text[:200] if patent_text else "특허기술"
+        patent_names = [Path(uploaded.name).stem for uploaded in patent_files]
+        patent_name = ", ".join(patent_names)
         docx_bytes = build_docx(
             report_text    = st.session_state.report_text,
-            patent_name    = patent_file.name.replace(".pdf","").replace(".docx",""),
+            patent_name    = patent_name,
             demand_company = demand_company,
         )
         st.session_state.docx_bytes = docx_bytes
+        fname = f"VF_TBD_{_report_base_name(patent_files)}"
+        if demand_company:
+            safe_company = re.sub(r'[\\/:*?"<>|]+', "_", demand_company).strip(" ._")
+            if safe_company:
+                fname += f"_{safe_company}"
+        st.session_state.download_filename = f"{fname}_v3.docx"
         add_log(f"  ✓ Word 문서 변환 완료 ({len(docx_bytes)//1024}KB)", "success")
 
         # ── STEP 4: 완료 ────────────────────────────────
@@ -445,13 +508,15 @@ if generate_btn and patent_file and api_key:
         add_log("   자세한 오류 정보는 아래를 확인하세요.", "error")
         progress_bar.progress(0, text="❌ 오류 발생")
 
+        safe_error = html.escape(str(e))
+        safe_detail = html.escape(st.session_state.error_detail)
         st.markdown(f"""
         <div class="error-box">
             <strong>❌ 오류가 발생했습니다</strong>
-            <p style="margin:0.5rem 0;color:#721c24;">{str(e)}</p>
+            <p style="margin:0.5rem 0;color:#721c24;">{safe_error}</p>
             <details>
                 <summary style="cursor:pointer;color:#721c24;font-size:0.85rem;">상세 오류 정보 보기</summary>
-                <pre>{st.session_state.error_detail}</pre>
+                <pre>{safe_detail}</pre>
             </details>
         </div>
         """, unsafe_allow_html=True)
@@ -466,10 +531,7 @@ if st.session_state.done and st.session_state.docx_bytes:
 
     dl_col1, dl_col2, dl_col3 = st.columns([1, 2, 1])
     with dl_col2:
-        fname = f"VF_TBD_{patent_file.name.split('.')[0] if patent_file else '보고서'}"
-        if demand_company:
-            fname += f"_{demand_company}"
-        fname += "_v3.docx"
+        fname = st.session_state.download_filename
 
         st.download_button(
             label     = "📄 Word 보고서 다운로드 (.docx)",

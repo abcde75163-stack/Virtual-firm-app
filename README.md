@@ -4,7 +4,7 @@
 
 ## 📋 개요
 
-특허 명세서(PDF/DOCX)를 업로드하면 Claude AI가 VF TBD v3.0 기준의
+특허 명세서(PDF/DOCX)를 한 개 이상 업로드하면 GPT가 VF TBD v3.0 기준의
 기술사업화 분석 보고서를 자동 생성하고 Word 파일로 다운로드 제공합니다.
 
 ## 🚀 Streamlit Cloud 배포 방법
@@ -22,7 +22,10 @@
 ### 3단계: API 키 설정 (필수)
 Streamlit Cloud → App Settings → Secrets에 아래 내용 추가:
 ```toml
-ANTHROPIC_API_KEY = "sk-ant-xxxxxxxxxxxxxxxx"
+OPENAI_API_KEY = "sk-xxxxxxxxxxxxxxxx"
+
+# 선택사항: 사용할 OpenAI 모델을 변경할 때만 설정
+OPENAI_MODEL = "gpt-6-astra"
 ```
 
 ## 📁 파일 구조
@@ -36,7 +39,7 @@ vf_app/
 └── core/
     ├── __init__.py
     ├── patent_parser.py      ← PDF/DOCX 텍스트 추출
-    ├── report_generator.py   ← Claude API 스트리밍 생성
+    ├── report_generator.py   ← OpenAI Responses API 스트리밍 생성
     └── docx_builder.py       ← Word 문서 변환
 ```
 
@@ -44,7 +47,7 @@ vf_app/
 
 | 기능 | 설명 |
 |---|---|
-| 특허 명세서 업로드 | PDF, DOCX 지원 (최대 50MB) |
+| 특허 명세서 다중 업로드 | PDF, DOCX 지원 (최대 10개, 전체 50MB) |
 | 수요기업 정보 입력 | 기업명 + IR자료 업로드 (선택) |
 | 실시간 생성 진행 표시 | 4섹션 분할 생성 + 로그 스트리밍 |
 | 에러 상세 정보 | traceback 포함 에러 박스 |
@@ -54,14 +57,17 @@ vf_app/
 
 ```bash
 pip install -r requirements.txt
-export ANTHROPIC_API_KEY="sk-ant-..."
+export OPENAI_API_KEY="sk-..."
+# 선택사항
+export OPENAI_MODEL="gpt-6-astra"
 streamlit run app.py
 ```
 
 ## 📌 버전 정보
 
-- 보고서 기준: VF TBD v3.0 (27개 섹션)
-- AI 모델: claude-sonnet-4-6
+- 보고서 기준: VF TBD v3.0 (26개 세부 섹션)
+- AI API: OpenAI Responses API
+- 기본 모델: gpt-6-astra (`OPENAI_MODEL`로 변경 가능)
 - 인증: 미구현 (v2에서 추가 예정)
 - 생성 이력: 미구현 (v2에서 추가 예정)
 
