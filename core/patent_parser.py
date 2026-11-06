@@ -24,27 +24,78 @@ def extract_text_from_file(file_path: str) -> str:
 
 
 def _extract_pdf(path: str) -> str:
-    """PyMuPDF(fitz)로 PDF 텍스트 추출"""
+    """PyMuPDF(fitz)로 PDF 텍스트 추출. 텍스트 레이어가 없는 페이지는 OCR로 보완."""
     try:
         import fitz  # PyMuPDF
-        doc  = fitz.open(path)
-        text = ""
-        for page_num, page in enumerate(doc):
-            page_text = page.get_text("text")
-            if page_text.strip():
-                text += f"\n[페이지 {page_num + 1}]\n{page_text}"
-        doc.close()
-
-        text = text.strip()
-        if not text:
-            raise ValueError("PDF에서 텍스트를 추출할 수 없습니다. 스캔된 이미지 PDF일 수 있습니다.")
-        return text
-
     except ImportError:
         raise ImportError(
             "PyMuPDF 라이브러리가 없습니다. "
             "pip install pymupdf 로 설치해 주세요."
         )
+
+    doc = fitz.open(path)
+    text = ""
+    ocr_page_count = 0
+    ocr_failed = False
+
+    for page_num, page in enumerate(doc):
+        page_text = page.get_text("text").strip()
+
+        if not page_text:
+            # 텍스트 레이어가 없는 페이지 → OCR 시도 (스캔 이미지 PDF 대응)
+            ocr_text = _ocr_page(page)
+            if ocr_text:
+                page_text = ocr_text
+                ocr_page_count += 1
+            else:
+                ocr_failed = True
+
+        if page_text:
+            text += f"\n[페이지 {page_num + 1}]\n{page_text}"
+
+    doc.close()
+    text = text.strip()
+
+    if not text:
+        if ocr_failed:
+            raise ValueError(
+                "PDF에서 텍스트를 추출할 수 없습니다. 스캔된 이미지 PDF로 보이며, "
+                "OCR 처리에도 실패했습니다. OCR 엔진(Tesseract) 설치 상태를 확인해 주세요."
+            )
+        raise ValueError("PDF에서 텍스트를 추출할 수 없습니다. 스캔된 이미지 PDF일 수 있습니다.")
+
+    if ocr_page_count > 0:
+        text += (
+            f"\n\n[※ {ocr_page_count}개 페이지는 텍스트 레이어가 없어 OCR로 인식하였습니다. "
+            f"인식 오류가 있을 수 있으니 핵심 수치·청구항은 원본 대조를 권장합니다]"
+        )
+
+    return text
+
+
+def _ocr_page(page, zoom: float = 4.0, lang: str = "kor+eng") -> str:
+    """
+    fitz Page 객체를 이미지로 렌더링한 뒤 Tesseract OCR로 텍스트 인식.
+    OCR 라이브러리/엔진이 없거나 실패하면 빈 문자열을 반환(호출부에서 원본 오류 처리).
+    """
+    try:
+        import fitz
+        import pytesseract
+        from PIL import Image
+    except ImportError:
+        return ""
+
+    try:
+        matrix = fitz.Matrix(zoom, zoom)
+        pix = page.get_pixmap(matrix=matrix)
+        img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples).convert("L")
+        # --psm 6: 균일한 텍스트 블록으로 가정 — 특허 명세서처럼 여백이 많은
+        # 스캔 페이지에서 기본 자동 레이아웃 분석이 일부 줄을 누락시키는 문제를 방지
+        ocr_text = pytesseract.image_to_string(img, lang=lang, config="--psm 6")
+        return ocr_text.strip()
+    except Exception:
+        # Tesseract 바이너리 미설치, 언어팩 누락 등 — OCR 실패는 조용히 넘기고 빈 결과 처리
+        return ""
 
 
 def _extract_docx(path: str) -> str:
