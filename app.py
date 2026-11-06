@@ -381,9 +381,9 @@ if generate_btn and patent_files and not patent_upload_error and api_key:
         }.get(level, "log-info")
         safe_msg = html.escape(msg)
         st.session_state.logs.append(f'<span class="{css_class}">{safe_msg}</span>')
-        html = "<br>".join(st.session_state.logs)
+        log_html = "<br>".join(st.session_state.logs)
         log_container.markdown(
-            f'<div class="progress-log">{html}</div>',
+            f'<div class="progress-log">{log_html}</div>',
             unsafe_allow_html=True
         )
 
